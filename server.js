@@ -8,6 +8,10 @@ app.use(express.json());
 let commandQueue = [];
 let esp32LastSeen = null;
 
+// Mevcut app.listen'ın ALTINA ekle
+const http_server = require('http').createServer(app);
+http_server.listen(8080, () => console.log('HTTP 8080 açık'));
+
 // ESP32 her 2 saniyede buraya gelir, varsa komutu alır
 app.get('/api/poll', (req, res) => {
     esp32LastSeen = Date.now();

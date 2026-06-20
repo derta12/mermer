@@ -7,174 +7,230 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 const PORT = process.env.PORT || 3000;
 
-let esp32Socket = null; // ESP32 bağlantısını hafızada tutacağız
+let esp32Socket = null;
 
-// Web Sockets Bağlantı Yönetimi
 wss.on('connection', (ws, req) => {
-    console.log('[Canlı Bağlantı] Yeni bir cihaz/arayüz bağlandı.');
-
-    // Bağlanan cihazın ESP32 mi yoksa Web Arayüzü mü olduğunu anlamak için url parametresine bakıyoruz
-    // ESP32 bağlanırken ws://sunucu_adresi/?device=esp32 diyecek
-    const urlParams = new URLSearchParams(req.url.split('?')[1]);
+    const urlParams = new URLSearchParams((req.url || '').split('?')[1]);
     const deviceType = urlParams.get('device');
 
     if (deviceType === 'esp32') {
         esp32Socket = ws;
-        console.log('[Sistem] Mermer Makinesi (ESP32) buluta başarıyla bağlandı!');
-        
+        console.log('[SİSTEM] ESP32 bağlandı.');
+
+        // Railway bağlantıyı uyutmasın diye ping
+        const pingInterval = setInterval(() => {
+            if (ws.readyState === ws.OPEN) ws.ping();
+        }, 20000);
+
         esp32Socket.on('close', () => {
-            console.log('[Sistem] Mermer Makinesi bağlantısı koptu.');
+            console.log('[SİSTEM] ESP32 bağlantısı koptu.');
             esp32Socket = null;
+            clearInterval(pingInterval);
         });
     }
 
-    // Tarayıcıdan veya ESP32'den gelen mesajları dinle
     ws.on('message', (message) => {
-        console.log(`[Veri] Gelen Mesaj: ${message}`);
-        // İhtiyaç halinde burada ESP32'den gelen sensör verileri işlenip web arayüzüne gönderilebilir
+        console.log(`[VERİ] ${message}`);
+    });
+
+    ws.on('error', (err) => {
+        console.error('[HATA] WebSocket hatası:', err.message);
     });
 });
 
-// Arayüzden (Butonlardan) gelen HTTP istekleri doğrudan WebSocket üzerinden ESP32'ye aktarılır
-app.get('/api/control', (expressReq, expressRes) => {
-    const { target, state } = expressReq.query; // Örn: ?target=valve&state=1
+app.get('/api/control', (req, res) => {
+    const { target, state } = req.query;
 
-    if (!esp32Socket) {
-        return expressRes.status(503).json({ status: "error", message: "Mermer makinesi şu anda buluta bağlı değil!" });
+    if (!esp32Socket || esp32Socket.readyState !== esp32Socket.OPEN) {
+        return res.status(503).json({ status: "error", message: "ESP32 şu an bağlı değil!" });
     }
 
-    // Komutu JSON formatında ESP32'ye gönderiyoruz
-    const command = JSON.stringify({ target: target, state: parseInt(state) });
+    const command = JSON.stringify({ target, state: parseInt(state) });
     esp32Socket.send(command);
-    
-    console.log(`[Komut Gönderildi] -> ESP32: ${command}`);
-    return expressRes.json({ status: "success", message: "Komut cihaza iletildi" });
+    console.log(`[KOMUT] -> ESP32: ${command}`);
+    return res.json({ status: "success", message: "Komut iletildi" });
 });
 
-// Web Arayüzü (Temiz, Beyaz Endüstriyel Tema)
+app.get('/api/status', (req, res) => {
+    res.json({ esp32Connected: esp32Socket !== null && esp32Socket.readyState === esp32Socket.OPEN });
+});
+
 app.get('/', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="tr">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Mermer Makinesi Uzaktan Kontrol Paneli</title>
-        <style>
-            :root {
-                --bg-color: #fcfcfc;
-                --card-bg: #ffffff;
-                --text-color: #2b2d42;
-                --border-color: #e2e8f0;
-                --primary-color: #3182ce;
-                --success-color: #38a169;
-            }
-            body {
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                background-color: var(--bg-color);
-                color: var(--text-color);
-                margin: 0;
-                padding: 30px;
-                display: flex;
-                justify-content: center;
-            }
-            .container {
-                width: 100%;
-                max-width: 550px;
-                background: var(--card-bg);
-                padding: 35px;
-                border-radius: 16px;
-                box-shadow: 0 10px 25px rgba(0,0,0,0.03);
-                border: 1px solid var(--border-color);
-            }
-            h1 { font-size: 22px; font-weight: 600; margin: 0 0 5px 0; color: #1a202c; }
-            .subtitle { font-size: 13px; color: #718096; margin-bottom: 30px; text-transform: uppercase; letter-spacing: 0.5px; }
-            
-            .control-card {
-                border: 1px solid var(--border-color);
-                border-radius: 12px;
-                padding: 10px 20px;
-                margin-top: 20px;
-            }
-            .io-row {
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-                padding: 18px 0;
-            }
-            .io-row:not(:last-child) { border-bottom: 1px solid var(--border-color); }
-            .io-label { font-weight: 500; font-size: 15px; }
-            
-            /* Switch Tasarımı */
-            .switch { position: relative; display: inline-block; width: 46px; height: 24px; }
-            .switch input { opacity: 0; width: 0; height: 0; }
-            .slider {
-                position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-                background-color: #cbd5e0; transition: .2s; border-radius: 24px;
-            }
-            .slider:before {
-                position: absolute; content: ""; height: 18px; width: 18px;
-                left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%;
-            }
-            input:checked + .slider { background-color: var(--primary-color); }
-            input:checked + .slider:before { transform: translateX(22px); }
-            
-            .alert-box {
-                background-color: #ebf8ff; color: #2b6cb0; padding: 12px; 
-                border-radius: 8px; font-size: 13px; border: 1px solid #bee3f8; margin-bottom: 20px;
-                text-align: center; font-weight: 500;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Mermer Makinesi Kontrol Paneli</h1>
-            <div class="subtitle">Cloud Uzaktan Erişim Ağ Geçidi (Gateway)</div>
-            
-            <div class="alert-box">
-                Sistem Durumu: Dünyanın her yerinden erişime açık (Güvenli Protokol)
-            </div>
+    res.send(`<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mermer Makinesi</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .panel {
+            width: 100%;
+            max-width: 420px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 16px;
+            padding: 32px;
+        }
+        .header { margin-bottom: 28px; }
+        .header h1 { font-size: 18px; font-weight: 600; color: #fff; }
+        .header p { font-size: 12px; color: #555; margin-top: 4px; letter-spacing: 1px; text-transform: uppercase; }
 
-            <div class="control-card">
-                <div class="io-row">
-                    <span class="io-label">Su Valfi (Digital OUT)</span>
-                    <label class="switch">
-                        <input type="checkbox" id="valveToggle" onchange="sendCommand('valve', this.checked)">
-                        <span class="slider"></span>
-                    </label>
-                </div>
+        .status-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin-bottom: 24px;
+            font-size: 13px;
+        }
+        .dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #444;
+            transition: background 0.3s;
+        }
+        .dot.online { background: #22c55e; box-shadow: 0 0 6px #22c55e88; }
+        .dot.offline { background: #ef4444; }
 
-                <div class="io-row">
-                    <span class="io-label">Ana Motor Kesici (Digital OUT)</span>
-                    <label class="switch">
-                        <input type="checkbox" id="motorToggle" onchange="sendCommand('motor', this.checked)">
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
+        .control-list { display: flex; flex-direction: column; gap: 12px; }
+        .control-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #111;
+            border: 1px solid #222;
+            border-radius: 10px;
+            padding: 16px 18px;
+        }
+        .control-info { display: flex; flex-direction: column; gap: 3px; }
+        .control-name { font-size: 14px; font-weight: 500; color: #ddd; }
+        .control-tag { font-size: 11px; color: #444; text-transform: uppercase; letter-spacing: 0.5px; }
+
+        .switch { position: relative; display: inline-block; width: 48px; height: 26px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #2a2a2a;
+            border-radius: 26px;
+            transition: .2s;
+        }
+        .slider:before {
+            position: absolute; content: "";
+            height: 20px; width: 20px;
+            left: 3px; bottom: 3px;
+            background: #555;
+            border-radius: 50%;
+            transition: .2s;
+        }
+        input:checked + .slider { background: #2563eb; }
+        input:checked + .slider:before { background: #fff; transform: translateX(22px); }
+
+        .toast {
+            position: fixed; bottom: 24px; right: 24px;
+            background: #1e1e1e; border: 1px solid #333;
+            border-radius: 8px; padding: 12px 18px;
+            font-size: 13px; color: #ccc;
+            opacity: 0; transform: translateY(10px);
+            transition: all 0.3s; pointer-events: none;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+        .toast.error { border-color: #7f1d1d; color: #fca5a5; }
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <div class="header">
+            <h1>Mermer Makinesi</h1>
+            <p>Uzaktan Kontrol Paneli</p>
         </div>
 
-        <script>
-            // Doğrudan Render API'sine komut gönderir. IP adresiyle işimiz kalmadı!
-            async function sendCommand(target, state) {
-                let numericState = state ? 1 : 0;
-                try {
-                    let response = await fetch(\`/api/control?target=\${target}&state=\${numericState}\`);
-                    let result = await response.json();
-                    if(result.status !== "success") {
-                        alert("Hata: " + result.message);
-                    }
-                } catch (err) {
-                    console.error("Komut gönderilemedi:", err);
-                    alert("Sunucu iletişim hatası.");
+        <div class="status-bar">
+            <div class="dot" id="dot"></div>
+            <span id="statusText">Kontrol ediliyor...</span>
+        </div>
+
+        <div class="control-list">
+            <div class="control-row">
+                <div class="control-info">
+                    <span class="control-name">Su Valfi</span>
+                    <span class="control-tag">Digital OUT</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="valveToggle" onchange="sendCommand('valve', this.checked)">
+                    <span class="slider"></span>
+                </label>
+            </div>
+
+            <div class="control-row">
+                <div class="control-info">
+                    <span class="control-name">Ana Motor</span>
+                    <span class="control-tag">Digital OUT</span>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="motorToggle" onchange="sendCommand('motor', this.checked)">
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        function showToast(msg, isError = false) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show' + (isError ? ' error' : '');
+            setTimeout(() => t.className = 'toast', 2500);
+        }
+
+        async function checkStatus() {
+            try {
+                const r = await fetch('/api/status');
+                const d = await r.json();
+                const dot = document.getElementById('dot');
+                const txt = document.getElementById('statusText');
+                dot.className = 'dot ' + (d.esp32Connected ? 'online' : 'offline');
+                txt.textContent = d.esp32Connected ? 'ESP32 Bağlı — Hazır' : 'ESP32 Bağlı Değil';
+            } catch(e) {}
+        }
+
+        async function sendCommand(target, state) {
+            try {
+                const r = await fetch('/api/control?target=' + target + '&state=' + (state ? 1 : 0));
+                const d = await r.json();
+                if (d.status !== 'success') {
+                    showToast('Hata: ' + d.message, true);
+                    // Toggle'ı geri al
+                    document.getElementById(target === 'valve' ? 'valveToggle' : 'motorToggle').checked = !state;
+                } else {
+                    showToast((target === 'valve' ? 'Su Valfi' : 'Motor') + ': ' + (state ? 'Açıldı' : 'Kapatıldı'));
                 }
+            } catch(err) {
+                showToast('Sunucu bağlantı hatası', true);
             }
-        </script>
-    </body>
-    </html>
-    `);
+        }
+
+        checkStatus();
+        setInterval(checkStatus, 5000);
+    </script>
+</body>
+</html>`);
 });
 
-server.listen(PORT, () => {
-    console.log(`Cloud Server up and running on port ${PORT}`);
-});
+server.listen(PORT, () => console.log(`[SİSTEM] Sunucu ${PORT} portunda çalışıyor.`));

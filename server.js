@@ -4,36 +4,27 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// Komut kuyruğu — ESP32 gelince alır
 let commandQueue = [];
 let esp32LastSeen = null;
 
-// Mevcut app.listen'ın ALTINA ekle
-const http_server = require('http').createServer(app);
-http_server.listen(8080, () => console.log('HTTP 8080 açık'));
-
-// ESP32 her 2 saniyede buraya gelir, varsa komutu alır
 app.get('/api/poll', (req, res) => {
     esp32LastSeen = Date.now();
     if (commandQueue.length > 0) {
-        const cmd = commandQueue.shift(); // Kuyruktaki ilk komutu al ve sil
+        const cmd = commandQueue.shift();
         return res.json({ hasCommand: true, command: cmd });
     }
     res.json({ hasCommand: false });
 });
 
-// Web arayüzünden komut gelir, kuyruğa eklenir
 app.get('/api/control', (req, res) => {
     const { target, state } = req.query;
     if (!target || state === undefined) {
         return res.status(400).json({ status: "error", message: "Eksik parametre" });
     }
     commandQueue.push({ target, state: parseInt(state) });
-    console.log(`[KOMUT] Kuyruğa eklendi: ${target} -> ${state}`);
     res.json({ status: "success" });
 });
 
-// ESP32 bağlı mı kontrolü
 app.get('/api/status', (req, res) => {
     const online = esp32LastSeen && (Date.now() - esp32LastSeen < 10000);
     res.json({ esp32Connected: !!online });
@@ -167,3 +158,4 @@ app.get('/', (req, res) => {
 });
 
 app.listen(PORT, () => console.log(`[SİSTEM] Sunucu ${PORT} portunda çalışıyor.`));
+
